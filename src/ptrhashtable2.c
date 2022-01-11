@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "sjudy.h"
 
 // best guess as to cache line, nothing too bad happens if it is wrong
 #define CACHE_LINE 64

@@ -335,7 +335,7 @@ void arena_freeze(rb_t *to, void *root, int key) {
         rb_free(&trace);
 }
 void *
-arena_thaw(Arena *to, int key, size_t len, void **ptr) {
+arena_thaw(int key, size_t len, void **ptr) {
         if(!signature)
                 signature = mk_signature();
         if(!ptr || !*ptr || len < sizeof(uintptr_t)*3)
