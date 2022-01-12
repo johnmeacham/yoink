@@ -15,10 +15,12 @@
        (type *)( (char *)(ptr) - offsetof(type, member) )
 
 /* we depend on these being the same size */
-_Static_assert(sizeof(void*) == sizeof(uintptr_t));
+_Static_assert(sizeof(void *) == sizeof(uintptr_t));
 
+#define IS_RAW(p)  ((p) == NULL || ((uintptr_t)(p) & 1))
 
-struct header *yoink_header(void *ptr) {
+struct header *yoink_header(void *ptr)
+{
         return container_of(ptr, struct header, data);
 }
 
@@ -30,7 +32,7 @@ void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs)
 //        printf("arena_alloc(_,%i,%i,%i)\n", tsz, bptrs, eptrs);
         size_t needed = sizeof(struct chain) + tsz;
         struct chain *chain = calloc(1, needed);
-        if(!chain) {
+        if (!chain) {
                 fprintf(stderr, "arena_alloc error: %s", strerror(errno));
                 abort();
         }
@@ -56,13 +58,13 @@ _arena_yoink_to_rb(rb_t *target, bool keep_meta, HashTable *ht, rb_t *trace, voi
                         int loc = rb_len(target) + (keep_meta ? sizeof(struct header) : 0);
                         struct header *head = container_of(np, struct header, data);
                         for (int i = 0; i < head->nptrs; i++) {
-                                if (!head->data[i] || (uintptr_t)head->data[i] & 1)
+                                if (IS_RAW(head->data[i]))
                                         continue;
                                 RB_PUSH(void *, &stack) = head->data[i];
                                 RB_PUSH(int, trace) = loc + sizeof(void *)*i;
                         }
                         *pp = loc;
-                        if(keep_meta) {
+                        if (keep_meta) {
                                 rb_append(target, head, sizeof(*head) + head->tsz);
                         } else {
                                 rb_append(target, head->data, head->tsz);
@@ -73,11 +75,11 @@ _arena_yoink_to_rb(rb_t *target, bool keep_meta, HashTable *ht, rb_t *trace, voi
 }
 
 void *
-yoink_to_malloc(void *root, size_t *len, bool keep_metadata)
+yoink_to_malloc(void *root, size_t *len)
 {
         if (len)
                 *len = 0;
-        if (!root || ((uintptr_t)root & 1))
+        if (IS_RAW(root))
                 return NULL;
         rb_t trace = RB_BLANK;
         rb_t output = RB_BLANK;
@@ -104,9 +106,6 @@ yoink_to_malloc(void *root, size_t *len, bool keep_metadata)
 }
 
 
-//too much of the void to implement this. maybe if it is needed later.
-//void *arena_yoink_custom(void *root, void *(*ccopy)(void *, void *), void *);
-
 ssize_t
 yoinks_to_arena(Arena *to, int nroots, void *root[nroots])
 {
@@ -115,15 +114,13 @@ yoinks_to_arena(Arena *to, int nroots, void *root[nroots])
         HashTable ht = HASHMAP_INIT;
         /* initialize with everything already in to so it isn't copied */
         for (struct chain *c = to->chain; c; c = c->next)
-                *ht_set(&ht, (intptr_t)c->data)  = (intptr_t)c->data;
-
+                * ht_set(&ht, (intptr_t)c->data)  = (intptr_t)c->data;
         /* push roots onto stack */
         for (int i = 0; i < nroots; i++)
                 RB_PUSH(void **, &stack) = root + i;
-
         RB_FOR_ENUM(void **, pnp, &stack) {
                 void **np = *pnp.v;
-                if(!*np || ((uintptr_t)*np & 1))
+                if (!*np || ((uintptr_t)*np & 1))
                         continue;
                 uintptr_t *pp = NULL;
                 if (ht_ins(&ht, (uintptr_t)*np, &pp)) {
@@ -156,7 +153,7 @@ arena_vacuums(Arena *bowl, int nroots, void *root[nroots])
                 RB_PUSH(void *, &stack) = root[i];
         RB_FOR_ENUM(void *, pnp, &stack) {
                 void *np = *pnp.v;
-                if(!np || ((uintptr_t)np & 1))
+                if (!np || ((uintptr_t)np & 1))
                         continue;
                 if (ht_add(&ht, (uintptr_t)np)) {
                         struct chain *chain = container_of(np, struct chain, data);
@@ -168,22 +165,22 @@ arena_vacuums(Arena *bowl, int nroots, void *root[nroots])
         struct chain *chain = bowl->chain;
         struct chain **pch = &chain;
         ssize_t freed  = 0;
-        while(*pch) {
+        while (*pch) {
                 struct chain *next = pch[0]->next;
-                if(!ht_in(&ht, (uintptr_t)pch[0]->data)) {
+                if (!ht_in(&ht, (uintptr_t)pch[0]->data)) {
                         freed += pch[0]->head.tsz;
 //                        printf("dfree: %p\n", pch[0]->data);
- //                       printf("free: %p\n", pch[0]);
+//                       printf("free: %p\n", pch[0]);
                         free(pch[0]);
                         *pch = next;
                 } else {
-  //                      printf("dkeep: %p\n", pch[0]->data);
-   //                     printf("keep: %p\n", pch[0]);
+                        //                      printf("dkeep: %p\n", pch[0]->data);
+                        //                     printf("keep: %p\n", pch[0]);
                         pch = &pch[0]->next;
                 }
         }
         bowl->chain = chain;
-    //    ht_dump(&ht);
+        //    ht_dump(&ht);
         ht_free(&ht);
         return freed;
 }
@@ -198,20 +195,76 @@ void *yoink_to_arena(Arena *to, void *root)
 /* very basic signature, this isn't cryptographically secure or anything, it is
  * just to catch gross errors early */
 static
-uintptr_t mk_signature(void) {
-        uintptr_t sig = 0xDEADBEEF;
-        uintptr_t byteorder = 0x10203040;
-        sig = hash_uintptr(sig ^ sizeof(short));
-        sig = hash_uintptr(sig ^ sizeof(int));
-        sig = hash_uintptr(sig ^ sizeof(long));
-        sig = hash_uintptr(sig ^ sizeof(long long));
-        sig = hash_uintptr(sig ^ sizeof(uintptr_t));
-        for(int i = 0; i < sizeof(uintptr_t);i++)
-                sig = hash_uintptr(sig ^ ((char *)&byteorder)[i]);
-        return sig;
+uintptr_t mk_signature(void)
+{
+        static uintptr_t signature = 0;
+        if (!signature) {
+                uintptr_t sig = 0xDEADBEEF;
+                uintptr_t byteorder = 0x10203040;
+                sig = hash_uintptr(sig ^ sizeof(short));
+                sig = hash_uintptr(sig ^ sizeof(int));
+                sig = hash_uintptr(sig ^ sizeof(long));
+                sig = hash_uintptr(sig ^ sizeof(long long));
+                sig = hash_uintptr(sig ^ sizeof(uintptr_t));
+                for (int i = 0; i < sizeof(uintptr_t); i++)
+                        sig = hash_uintptr(sig ^ ((char *)&byteorder)[i]);
+                signature = sig;
+        }
+        return signature;
 }
-static uintptr_t signature = 0;
 
+struct frozen *yoink_freeze(void *root, struct frozen *ice)
+{
+        rb_t to = RB_BLANK;
+        struct frozen *fz = rb_calloc(&to, sizeof(struct frozen));
+        fz->magic = mk_signature();
+        if (IS_RAW(root)) {
+                fz->length = rb_len(&to);
+                fz->base = fz;
+                fz->root = root;
+                return rb_take(&to);
+        }
+        HashTable ht = HASHMAP_INIT;
+        rb_t trace = RB_BLANK;
+        _arena_yoink_to_rb(&to, true, &ht, &trace, root);
+        void *ptr = rb_ptr(&to);
+        RB_FOR(int, tp, &trace) {
+                int loc = *tp;
+                void **data = ptr + loc;
+                void *odata = *data;
+                Value *v = ht_get(&ht, (uintptr_t) * data);
+                *data = ptr + *v;
+                printf("radjusting@%i via %lu %p -> %p\n", loc, *v, odata, *data);
+                assert(*data >= rb_ptr(&to));
+                assert(*data < rb_endptr(&to));
+        }
+        fz = rb_ptr(&to);
+        fz->root = (void *)*ht_get(&ht, (uintptr_t)root);
+        fz->length = rb_len(&to);
+        fz->base = fz;
+        return rb_take(&to);
+}
+
+void *yoink_thaw(struct frozen *ice)
+{
+        if (ice->magic != mk_signature())
+                return NULL;
+        if (ice->base == ice)
+                return ice->root;
+        ptrdiff_t offset = (void *)ice - ice->base;
+        for (struct header *head = (void *)ice->data;
+             (void *)head < (void *)ice + ice->length;
+             head = (void *)head + sizeof(struct header) + head->tsz) {
+                for (int i = 0; i < head->nptrs; i++)
+                        head->data[i + head->bptrs] += offset;
+        }
+        ice->root += offset;
+        ice->base += offset;
+        assert(ice->base == ice);
+        return ice->root;
+}
+
+/*
 void arena_freeze(rb_t *to, void *root, int key) {
         if(!signature)
                 signature = mk_signature();
@@ -242,19 +295,20 @@ void arena_freeze(rb_t *to, void *root, int key) {
 }
 void *
 arena_thaw(int key, size_t len, void **ptr) {
-        /* if(!signature) */
-        /*         signature = mk_signature(); */
-        /* if(!ptr || !*ptr || len < sizeof(uintptr_t)*3) */
-        /*         return NULL; */
-        /* uintptr_t *ps = *ptr; */
-        /* if((ps[0] ^ key) != signature) */
-        /*         return NULL; */
-        /* if(ps[1] > len) */
-        /*         return NULL; */
+        if(!signature)
+                signature = mk_signature();
+        if(!ptr || !*ptr || len < sizeof(uintptr_t)*3)
+                return NULL;
+        uintptr_t *ps = *ptr;
+        if((ps[0] ^ key) != signature)
+                return NULL;
+        if(ps[1] > len)
+                return NULL;
 //        rb_t trace = RB_BLANK;
 //        return
 return 0;
 }
+*/
 
 /* test code after this */
 struct node {
@@ -298,7 +352,7 @@ dump_tree(struct node *n, int idt)
 
 struct node *insert(Arena *arena, struct node *root, struct node *n)
 {
-       // printf("insert(%p %p)\n", root, n);
+        // printf("insert(%p %p)\n", root, n);
 //       printf("insert(%p,%p)\n",root,n);
         if (!root)
                 return n;
@@ -391,7 +445,7 @@ int main(int argc, char *argv[])
         printf("after3: %lu\n", arena_nbytes(&arena3));
         dump_tree(root3, 0);
         size_t len;
-        void *root4 = yoink_to_malloc(root3, &len, false);
+        void *root4 = yoink_to_malloc(root3, &len);
         printf("after4: %lu\n", len);
         dump_tree(root4, 0);
         printf("big one \n");
@@ -401,7 +455,7 @@ int main(int argc, char *argv[])
                 root = insert_tree(&arena, root, rand() % 1000);
         dump_tree(root, 0);
         printf("before: %lu\n", arena_nbytes(&arena));
-        void *rooty = yoink_to_malloc(root, &len, false);
+        void *rooty = yoink_to_malloc(root, &len);
         printf("after5: %lu\n", len);
         dump_tree(rooty, 0);
         compare_tree(rooty, root);

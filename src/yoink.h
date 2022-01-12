@@ -31,7 +31,6 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <sys/types.h>
-#include <stdatomic.h>
 #include "yoink_private.h"
 #include "arena.h"
 
@@ -95,17 +94,11 @@ ssize_t yoinks_to_arena(Arena *to, int nroots, void *roots[nroots]);
  *
  * *len will contain the length of data allocated.
  *
- * All metadata is stripped so only raw pointers remain unless keep_metadata is
- * true. If you keep metadata you can yoink from pointers into this malloced
- * space, otherwise you may not.
- *
- * the metadata on root is never kept even if keep_metadata is true so it may be
- * returned at the beginning of the malloced buffer and root may not occur in a
- * cycle when keep_metadata is true.
+ * root must be a valid pointer or NULL.
  *
  */
 
-void *yoink_to_malloc(void *what, size_t *len, bool keep_metadata);
+void *yoink_to_malloc(void *root, size_t *len);
 
 /*
  * This is roughly equivalent to
@@ -196,10 +189,12 @@ uint32_t yoink_set_flags(void *, uint32_t flags);
  * fwrite(new, 1, new->length, file);
  *
  * */
+struct frozen;
 struct frozen {
         uintptr_t magic;       // magic number used for sanity checking
         uintptr_t length;      // length in bytes including frozen header
-        uintptr_t base;        // relocation base, contains pointer base, updated by thaw.
+        void *base;   // relocation base, contains pointer base, updated by thaw.
+        void *root;            // the root
         void *data[];
 };
 

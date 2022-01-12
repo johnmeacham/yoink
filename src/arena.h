@@ -10,7 +10,7 @@ struct Arena {
         struct chain *_Atomic chain;
 };
 typedef struct Arena Arena;
-#define ARENA_INIT { .chain = ATOMIC_VAR_INIT(NULL) }
+#define ARENA_INIT { .chain = NULL }
 
 /* malloc allocates raw bytes without internal structure that will be freed when
  * the arena is freed. */

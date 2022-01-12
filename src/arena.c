@@ -9,7 +9,8 @@
 #include "resizable_buf.h"
 
 
-void _arena_add_link(Arena *arena, struct chain *chain) {
+void _arena_add_link(Arena *arena, struct chain *chain)
+{
         struct chain *orig = atomic_load(&arena->chain);
         do {
                 chain->next = orig;
@@ -21,7 +22,7 @@ void *arena_malloc(Arena *arena, size_t size)
 //        printf("arena_alloc(_,%i,%i,%i)\n", tsz, bptrs, eptrs);
         size_t needed = sizeof(struct chain) + size;
         struct chain *chain = malloc(needed);
-        if(!chain) {
+        if (!chain) {
                 fprintf(stderr, "arena_malloc error: %s", strerror(errno));
                 abort();
         }
@@ -31,17 +32,17 @@ void *arena_malloc(Arena *arena, size_t size)
         return chain->data;
 }
 
-void arena_move(Arena *to, Arena *from) {
+void arena_move(Arena *to, Arena *from)
+{
         struct chain *orig = atomic_load(&from->chain);
         while (!atomic_compare_exchange_weak(&from->chain, &orig, NULL));
         struct chain *last = orig;
-        while(last->next)
+        while (last->next)
                 last = last->next;
         struct chain *torig =  atomic_load(&to->chain);
         do {
                 last->next = torig;
-        }
-        while (!atomic_compare_exchange_weak(&to->chain, &torig, orig));
+        } while (!atomic_compare_exchange_weak(&to->chain, &torig, orig));
 }
 
 void arena_free(Arena *arena)
@@ -57,14 +58,16 @@ void arena_free(Arena *arena)
 }
 
 char *
-arena_strdup(Arena *bowl, char *s) {
+arena_strdup(Arena *bowl, char *s)
+{
         size_t len = strlen(s) + 1;
         char *ret = arena_malloc(bowl, len);
         return memcpy(ret, s, len);
 }
 
 char *
-arena_strndup(Arena *bowl, char *s, size_t n) {
+arena_strndup(Arena *bowl, char *s, size_t n)
+{
         size_t len = strlen(s);
         len = (len > n ? n : len);
         char *ret = arena_malloc(bowl, len + 1);
@@ -73,7 +76,8 @@ arena_strndup(Arena *bowl, char *s, size_t n) {
 }
 
 char *
-arena_vprintf(Arena *bowl, char *fmt, va_list ap) {
+arena_vprintf(Arena *bowl, char *fmt, va_list ap)
+{
         va_list cap;
         va_copy(cap, ap);
         int size = vsnprintf(NULL, 0, fmt, cap);
@@ -88,7 +92,8 @@ arena_vprintf(Arena *bowl, char *fmt, va_list ap) {
 }
 
 char *
-arena_printf(Arena *bowl, char *fmt, ...) {
+arena_printf(Arena *bowl, char *fmt, ...)
+{
         va_list ap;
         va_start(ap, fmt);
         char *ret = arena_vprintf(bowl, fmt, ap);
@@ -97,21 +102,24 @@ arena_printf(Arena *bowl, char *fmt, ...) {
 }
 
 void *
-arena_memcpy(Arena *bowl, void *data, size_t len) {
+arena_memcpy(Arena *bowl, void *data, size_t len)
+{
         return memcpy(arena_malloc(bowl, len), data, len);
 }
 
 void
-arena_initialize_buffer(rb_t *buf) {
+arena_initialize_buffer(rb_t *buf)
+{
         /* clear buffer */
         rb_clear(buf);
         rb_calloc(buf, sizeof(struct chain));
 }
 
 void *
-arena_finalize_buffer(Arena *bowl, rb_t *buf) {
+arena_finalize_buffer(Arena *bowl, rb_t *buf)
+{
         /* make sure we have some breathing room to keep alignments correct. */
-        int tsz = _ARENA_RUP(rb_len(buf))*sizeof(void*);
+        int tsz = _ARENA_RUP(rb_len(buf)) * sizeof(void *);
         rb_calloc(buf, tsz - rb_len(buf));
         struct chain *chain = rb_take(buf);
         chain->head.tsz = tsz;
