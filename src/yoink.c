@@ -37,27 +37,9 @@ void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs)
         chain->head.tsz  = tsz;
         chain->head.nptrs = eptrs - bptrs;
         chain->head.bptrs = bptrs;
-        struct chain *orig = atomic_load(&arena->chain);
-        do {
-                chain->next = orig;
-        } while (!atomic_compare_exchange_weak(&arena->chain, &orig, chain));
+        _arena_add_link(arena, chain);
         return chain->data;
 }
-
-static struct chain *
-chain_dup(Arena *to, struct chain *chain)
-{
-        size_t needed = sizeof(struct chain) + chain->head.tsz;
-        struct chain *new = malloc(needed);
-        memcpy(new, chain, needed);
-
-        struct chain *orig = atomic_load(&to->chain);
-        do {
-                new->next = orig;
-        } while (!atomic_compare_exchange_weak(&to->chain, &orig, new));
-        return new;
-}
-
 
 
 /* trace will contain integers with the offsets to all the pointers in rb, hash
@@ -72,18 +54,18 @@ _arena_yoink_to_rb(rb_t *target, bool keep_meta, HashTable *ht, rb_t *trace, voi
                 uintptr_t *pp = NULL;
                 if (ht_ins(ht, (uintptr_t)np, &pp)) {
                         int loc = rb_len(target) + (keep_meta ? sizeof(struct header) : 0);
-                        struct chain *chain = container_of(np, struct chain, data);
-                        for (int i = 0; i < chain->head.nptrs; i++) {
-                                if (!chain->data[i] || (uintptr_t)chain->data[i] & 1)
+                        struct header *head = container_of(np, struct header, data);
+                        for (int i = 0; i < head->nptrs; i++) {
+                                if (!head->data[i] || (uintptr_t)head->data[i] & 1)
                                         continue;
-                                RB_PUSH(void *, &stack) = chain->data[i];
+                                RB_PUSH(void *, &stack) = head->data[i];
                                 RB_PUSH(int, trace) = loc + sizeof(void *)*i;
                         }
                         *pp = loc;
                         if(keep_meta) {
-                                rb_append(target, &chain->head, sizeof(chain->head) + chain->head.tsz);
+                                rb_append(target, head, sizeof(*head) + head->tsz);
                         } else {
-                                rb_append(target, chain->data, chain->head.tsz);
+                                rb_append(target, head->data, head->tsz);
                         }
                 }
         }
@@ -126,16 +108,16 @@ yoink_to_malloc(void *root, size_t *len, bool keep_metadata)
 //void *arena_yoink_custom(void *root, void *(*ccopy)(void *, void *), void *);
 
 ssize_t
-arena_yoinks(Arena *to, bool always_copy, int nroots, void *root[nroots])
+yoinks_to_arena(Arena *to, int nroots, void *root[nroots])
 {
         ssize_t tlen = 0;
         rb_t stack = RB_BLANK;
         HashTable ht = HASHMAP_INIT;
-        /* if we don't want to copy we have to seed the table with pointers
-         * already in target */
-        if(!always_copy)
-                for (struct chain *c = to->chain; c; c = c->next)
-                        *ht_set(&ht, (intptr_t)c->data)  = (intptr_t)c->data;
+        /* initialize with everything already in to so it isn't copied */
+        for (struct chain *c = to->chain; c; c = c->next)
+                *ht_set(&ht, (intptr_t)c->data)  = (intptr_t)c->data;
+
+        /* push roots onto stack */
         for (int i = 0; i < nroots; i++)
                 RB_PUSH(void **, &stack) = root + i;
 
@@ -145,8 +127,11 @@ arena_yoinks(Arena *to, bool always_copy, int nroots, void *root[nroots])
                         continue;
                 uintptr_t *pp = NULL;
                 if (ht_ins(&ht, (uintptr_t)*np, &pp)) {
-                        struct chain *chain = container_of(*np, struct chain, data);
-                        chain = chain_dup(to, chain);
+                        struct header *head = container_of(*np, struct header, data);
+                        struct chain *chain = malloc(sizeof(struct chain) + head->tsz);
+                        chain->head = *head;
+                        memcpy(chain->data, head->data, head->tsz);
+                        _arena_add_link(to, chain);
                         tlen += chain->head.tsz;
                         for (int i = 0; i < chain->head.nptrs; i++)
                                 RB_PUSH(void **, &stack) = &chain->data[i];

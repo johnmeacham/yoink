@@ -18,6 +18,7 @@
 
 
 struct chain;
+struct Arena;
 
 struct header {
         int32_t tsz;
@@ -32,6 +33,8 @@ struct chain {
         struct header head;
         void *data[];
 };
+
+void _arena_add_link(struct Arena *arena, struct chain *chain);
 
 /* round up to next pointer size */
 #define _ARENA_RUP(x) (((x) + sizeof(void*) - 1)/sizeof(void*))

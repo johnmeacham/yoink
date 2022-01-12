@@ -9,7 +9,7 @@
 #include "resizable_buf.h"
 
 
-static void add_link(Arena *arena, struct chain *chain) {
+void _arena_add_link(Arena *arena, struct chain *chain) {
         struct chain *orig = atomic_load(&arena->chain);
         do {
                 chain->next = orig;
@@ -27,7 +27,7 @@ void *arena_malloc(Arena *arena, size_t size)
         }
         memset(chain, 0, sizeof(struct chain));
         chain->head.tsz  = size;
-        add_link(arena, chain);
+        _arena_add_link(arena, chain);
         return chain->data;
 }
 
@@ -104,17 +104,17 @@ arena_memcpy(Arena *bowl, void *data, size_t len) {
 void
 arena_initialize_buffer(rb_t *buf) {
         /* clear buffer */
-        rb_free(buf);
+        rb_clear(buf);
         rb_calloc(buf, sizeof(struct chain));
 }
 
 void *
 arena_finalize_buffer(Arena *bowl, rb_t *buf) {
         /* make sure we have some breathing room to keep alignments correct. */
-        int tsz = _ARENA_RUP(rb_len(buf));
-        rb_calloc(buf, tsz*sizeof(void*) - rb_len(buf));
+        int tsz = _ARENA_RUP(rb_len(buf))*sizeof(void*);
+        rb_calloc(buf, tsz - rb_len(buf));
         struct chain *chain = rb_take(buf);
         chain->head.tsz = tsz;
-        add_link(bowl, chain);
+        _arena_add_link(bowl, chain);
         return chain->data;
 }
