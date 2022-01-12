@@ -15,7 +15,7 @@ nms: t
 %: obj/t/%.o
 	$(LD) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
-src/yoink: obj/src/ptrhashtable2.o obj/resizable_buf/resizable_buf.o obj/src/inthash.o
+src/yoink: obj/src/arena.o obj/src/ptrhashtable2.o obj/resizable_buf/resizable_buf.o obj/src/inthash.o
 
 
 obj/%.o : %.c

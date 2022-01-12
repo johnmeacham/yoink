@@ -32,14 +32,9 @@
 #include <stdatomic.h>
 #include "resizable_buf.h"
 #include "yoink_private.h"
+#include "arena.h"
 
-struct Arena {
-        struct chain *_Atomic chain;
-};
 
-/* Area must be initialized with ARENA_INIT whenever it is declared */
-typedef struct Arena Arena;
-#define ARENA_INIT { .chain = ATOMIC_VAR_INIT(NULL) }
 
 /* allocate some memory in an arena. The new memory will be zero filled.
  * tsz is size of allocation in number of words of size (void*), bptrs is the
@@ -47,22 +42,17 @@ typedef struct Arena Arena;
  * alloc is thread-safe and non locking itself but may call malloc. */
 void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs) _MALLOC _MALLOC_SIZE(2);
 
-/* calloc allocates raw bytes that have no pointers but is still ossociated with
- * an arena and will be freed when the arena is freed. */
-void *arena_malloc(Arena *arena, size_t n) _MALLOC _MALLOC_SIZE(2);
 
-/* free an arena and all memory allocated by it. arena is left as a valid empty
- * arena after this call. arena_free is threadsafe itself in that multiple
- * concurrent calls to it will not double-free or leak memory, but memory freed
- * by arena_free is no longer valid.  */
-void arena_free(Arena *arena);
-
-/* yoink all data reachable from root, all managed pointers must point to data
- * in a valid arena or be NULL.
+/* yoink all data dependencies reachable from root into arena to, all managed
+ * pointers must point to data in a valid arena or be NULL.
  *
- * yoink always creates a full copy of the data. yoinking into the same arena
- * as some of the data is located will create a new copy of the data in the same
- * arena. see arena_yoinks for a version which does not do this. */
+ * If data already exists in to, it will not be copied and the existing data
+ * will be returned. If you do not wish this behavior and want a full copy in
+ * the same arena, yoink to a new arena and use arena_join to move the copy into
+ * the original.
+ *
+ * */
+
 void *arena_yoink(Arena *to, void *root);
 
 /* yoink with multiple roots, modifies roots array in place. returns number of
@@ -77,16 +67,39 @@ void *arena_yoink(Arena *to, void *root);
 ssize_t arena_yoinks(Arena *target, bool always_copy, int nroots, void *roots[nroots]);
 
 
-/* yoink to a continuous buffer that was created via a single malloc call. this
- * may be freed by free. Useful for APIs when you want to return a complicated
- * object with internal pointers that can be freed with free.
+/* yoink to a continuous compact buffer that was created via a single malloc
+ * call. This always makes a full independent copy of the data.
  *
- * This strips all yoink meta-data and the length of the output is stored in
- * *len.
+ * The buffer may be freed by calling free.  Useful for APIs when you want to
+ * return a complicated object with internal pointers that can be freed with
+ * free or if you want a more efficient memory/cache layout for long lived
+ * data and don't intend to use the arena again.
+ *
+ * *len will contain the length of data allocated.
+ *
+ * All metadata is stripped so only raw pointers remain unless keep_metadata is
+ * true. If you keep metadata you can yoink from pointers into this malloced
+ * space, otherwise you may not.
+ *
+ * the metadata on root is never kept even if keep_metadata is true so it may be
+ * returned at the beginning of the malloced buffer.
  */
-void *arena_yoink_to_malloc(void *what, size_t *len);
+void *arena_yoink_to_malloc(void *what, size_t *len, bool keep_metadata);
 
-/* This is roughly the equivalent of yoinking into a new arena and replacing the
+/*
+ * This is equivalent to
+ *
+ * Arena new = ARENA_INIT;
+ * arena_yoinks(&new, nroots, roots);
+ * arena_free(bowl);
+ * *bowl = new;
+ *
+ * however it is free to reuse data in new intsead of copying it.
+ * but may be more efficient and reuse data that is already in bowl however
+ * reuse is not guerenteed. yoinks behaves as it would otherwise and copies
+ * data.
+ *
+ * This is roughly the equivalent of yoinking into a new arena and replacing the
  * old arena with the new one however no data is copied so all pointers remain
  * valid and it is much more efficient. only things reachable from roots are
  * kept.  Returns the number of bytes freed by the vacuuming.  If validate is
@@ -98,13 +111,6 @@ void *arena_yoink_to_malloc(void *what, size_t *len);
 
 ssize_t arena_vacuums(Arena *bowl, int nroots, void *roots[nroots]);
 
-/* utility routines to allocate strings and raw data in an arena. behave like
- * the c standard library routines but allocate return data in the arena */
-char *arena_printf(Arena *bowl, char *fmt, ...) _MALLOC _PRINTF(2, 3);
-char *arena_vprintf(Arena *bowl, char *fmt, va_list ap) _MALLOC;
-char *arena_strdup(Arena *bowl, char *s) _MALLOC;
-char *arena_strndup(Arena *bowl, char *s, size_t n) _MALLOC;
-void *arena_memcpy(Arena *bowl, void *data, size_t len) _MALLOC;
 
 /* Initialize a buffer for inclusion in an arena. the buffer will be seeded with
  * appropriate bookkeeping data that you should not modify and take into account
@@ -129,8 +135,6 @@ void *arena_finalize_buffer(Arena *bowl, rb_t *rb, bool pointer_array);
 /* if zero length arrays don't work then an empty struct might */
 #define END_PTRS struct { void *_dummy; } _arena_end_ptrs[0]
 
-/* round up to next pointer size */
-#define _ARENA_RUP(x) (((x) + sizeof(void*) - 1)/sizeof(void*))
 
 #define ARENA_CALLOC(arena, x) \
     arena_alloc(arena, sizeof(x), \

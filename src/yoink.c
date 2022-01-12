@@ -9,20 +9,6 @@
 #include "ptrhashtable2.h"
 #include "resizable_buf.h"
 
-// the ptrs is needed so the size gets aligned to a pointer boundry.
-struct header {
-        int32_t tsz;
-        int16_t nptrs;
-        int8_t  bptrs;
-        int8_t  flags;
-        void *data[];
-};
-
-struct chain {
-        struct chain *next;
-        struct header head;
-        void *data[];
-};
 
 
 #define container_of(ptr, type, member) \
@@ -31,17 +17,17 @@ struct chain {
 /* we depend on these being the same size */
 _Static_assert(sizeof(void*) == sizeof(uintptr_t));
 
-void arena_free(Arena *arena)
-{
-        struct chain *orig = atomic_load(&arena->chain);
-        while (!atomic_compare_exchange_weak(&arena->chain, &orig, NULL));
-        while (orig) {
-                struct chain *nnext = orig->next;
-                free(orig);
-                orig = nnext;
-        };
-        assert(!arena->chain);
-}
+/* void arena_free(Arena *arena) */
+/* { */
+/*         struct chain *orig = atomic_load(&arena->chain); */
+/*         while (!atomic_compare_exchange_weak(&arena->chain, &orig, NULL)); */
+/*         while (orig) { */
+/*                 struct chain *nnext = orig->next; */
+/*                 free(orig); */
+/*                 orig = nnext; */
+/*         }; */
+/*         assert(!arena->chain); */
+/* } */
 
 void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs)
 {
@@ -79,41 +65,41 @@ chain_dup(Arena *to, struct chain *chain)
         return new;
 }
 
-char *
-arena_strdup(Arena *bowl, char *s) {
-        size_t len = strlen(s) + 1;
-        char *ret = arena_alloc(bowl, len, 0, 0);
-        memcpy(ret, s, len);
-        return ret;
-}
-char *
-arena_vprintf(Arena *bowl, char *fmt, va_list ap) {
-        va_list cap;
-        va_copy(cap, ap);
-        int size = vsnprintf(NULL, 0, fmt, cap);
-        va_end(cap);
-        if (size < 0)
-                return NULL;
-        char *ret = arena_alloc(bowl, size + 1, 0, 0);
-        size = vsnprintf(ret, size + 1, fmt, ap);
-        if (size < 0)
-                return NULL;
-        return ret;
-}
+/* char * */
+/* arena_strdup(Arena *bowl, char *s) { */
+/*         size_t len = strlen(s) + 1; */
+/*         char *ret = arena_alloc(bowl, len, 0, 0); */
+/*         memcpy(ret, s, len); */
+/*         return ret; */
+/* } */
+/* char * */
+/* arena_vprintf(Arena *bowl, char *fmt, va_list ap) { */
+/*         va_list cap; */
+/*         va_copy(cap, ap); */
+/*         int size = vsnprintf(NULL, 0, fmt, cap); */
+/*         va_end(cap); */
+/*         if (size < 0) */
+/*                 return NULL; */
+/*         char *ret = arena_alloc(bowl, size + 1, 0, 0); */
+/*         size = vsnprintf(ret, size + 1, fmt, ap); */
+/*         if (size < 0) */
+/*                 return NULL; */
+/*         return ret; */
+/* } */
 
-char *
-arena_printf(Arena *bowl, char *fmt, ...) {
-        va_list ap;
-        va_start(ap, fmt);
-        char *ret = arena_vprintf(bowl, fmt, ap);
-        va_end(ap);
-        return ret;
-}
+/* char * */
+/* arena_printf(Arena *bowl, char *fmt, ...) { */
+/*         va_list ap; */
+/*         va_start(ap, fmt); */
+/*         char *ret = arena_vprintf(bowl, fmt, ap); */
+/*         va_end(ap); */
+/*         return ret; */
+/* } */
 
-void *
-arena_memcpy(Arena *bowl, void *data, size_t len) {
-        return memcpy(arena_alloc(bowl, len, 0, 0), data, len);
-}
+/* void * */
+/* arena_memcpy(Arena *bowl, void *data, size_t len) { */
+/*         return memcpy(arena_alloc(bowl, len, 0, 0), data, len); */
+/* } */
 
 void
 arena_initialize_buffer(Arena *bowl, rb_t *buf) {
@@ -348,6 +334,7 @@ arena_thaw(int key, size_t len, void **ptr) {
         rb_t trace = RB_BLANK;
 }
 
+/* test code after this */
 struct node {
         BEGIN_PTRS;
         struct node *left;
