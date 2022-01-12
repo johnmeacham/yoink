@@ -29,42 +29,60 @@
 
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <sys/types.h>
 #include <stdatomic.h>
-#include "resizable_buf.h"
 #include "yoink_private.h"
 #include "arena.h"
 
 
+#define YFLAG_NULL_CHILDREN 1 // do not copy children and instead set all pointers to NULL
+#define YFLAG_NULL_SELF     2 // don't copy self and instead set pointer to NULL when encountered.
+#define YFLAG_ALIAS_SELF    4 // don't copy self and allow pointer to be shared
+
+// these allow unsetting flags
+#define YFLAG_NO_NULL_CHILDREN 1 << 8 // do not copy children and instead set all pointers to NULL
+#define YFLAG_NO_NULL_SELF     2 << 8 // don't copy self and instead set pointer to NULL when encountered.
+#define YFLAG_NO_ALIAS_SELF    4 << 8 // don't copy self and allow pointer to be shared
+
+/* internal flags */
+#define YFLAG_IS_FROZEN    8  // set if inside relocatable frozen
+#define YFLAG_IS_USED      16 // utilized by vacuum
+#define YFLAG_ALL_POINTERS 32 // all are pointers
+
+#define YFLAG_F6     64
+#define YFLAG_F7     128
 
 /* allocate some memory in an arena. The new memory will be zero filled.
  * tsz is size of allocation in number of words of size (void*), bptrs is the
  * beginning of the pointers and eptrs is the end of pointers.
  * alloc is thread-safe and non locking itself but may call malloc. */
-void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs) _MALLOC _MALLOC_SIZE(2);
+void *arena_yoink_alloc(Arena *arena, int tsz, int bptrs, int eptrs) _MALLOC _MALLOC_SIZE(2);
 
 
 /* yoink all data dependencies reachable from root into arena to, all managed
  * pointers must point to data in a valid arena or be NULL.
  *
  * If data already exists in to, it will not be copied and the existing data
- * will be returned. If you do not wish this behavior and want a full copy in
+ * will be modified in place. If you do not wish this behavior and want a full copy in
  * the same arena, yoink to a new arena and use arena_join to move the copy into
  * the original.
  *
+ * calls yoinks_to_arena internally.
+ *
  * */
 
-void *arena_yoink(Arena *to, void *root);
+void *yoink_to_arena(Arena *to, void *root);
 
 /* yoink with multiple roots, modifies roots array in place. returns number of
- * bytes yoinked. equivalent to calling arena_yoink multiple times but is more
- * efficient.
+ * bytes yoinked.
  *
  * if always_copy is true then items will be copied even if they already exist
  * in 'target' just like arena_yoink, if it is false, pointers to 'target' will
  * not be copied. there is a cost to setting this to false on the order of the
  * size of target due to having to scan it to classify pointer types.
  * */
-ssize_t arena_yoinks(Arena *target, bool always_copy, int nroots, void *roots[nroots]);
+ssize_t yoinks_to_arena(Arena *to, int nroots, void *roots[nroots]);
 
 
 /* yoink to a continuous compact buffer that was created via a single malloc
@@ -82,17 +100,23 @@ ssize_t arena_yoinks(Arena *target, bool always_copy, int nroots, void *roots[nr
  * space, otherwise you may not.
  *
  * the metadata on root is never kept even if keep_metadata is true so it may be
- * returned at the beginning of the malloced buffer.
+ * returned at the beginning of the malloced buffer and root may not occur in a
+ * cycle when keep_metadata is true.
+ *
  */
-void *arena_yoink_to_malloc(void *what, size_t *len, bool keep_metadata);
+
+void *yoink_to_malloc(void *what, size_t *len, bool keep_metadata);
 
 /*
- * This is equivalent to
+ * This is roughly equivalent to
  *
  * Arena new = ARENA_INIT;
  * arena_yoinks(&new, nroots, roots);
  * arena_free(bowl);
- * *bowl = new;
+ * arena_join(bowl, &new);
+ *
+ * except that entries in bowl are not relocated and the memory is re-used
+ * directly.
  *
  * however it is free to reuse data in new intsead of copying it.
  * but may be more efficient and reuse data that is already in bowl however
@@ -107,10 +131,12 @@ void *arena_yoink_to_malloc(void *what, size_t *len, bool keep_metadata);
  * point outside the arena, otherwise it will ignore them. vacuum is not
  * threadsafe as it modifies the arena in place and won't catch pointers that
  * mutate while it is running.
+ *
  * */
 
 ssize_t arena_vacuums(Arena *bowl, int nroots, void *roots[nroots]);
 
+uint32_t yoink_set_flags(void *, uint32_t flags);
 
 /* Initialize a buffer for inclusion in an arena. the buffer will be seeded with
  * appropriate bookkeeping data that you should not modify and take into account
@@ -125,8 +151,8 @@ ssize_t arena_vacuums(Arena *bowl, int nroots, void *roots[nroots]);
  *
  * if pointer_array is true the data will be assumed to be an array of managed
  * pointers, otherwise it is raw uninterpreted data. */
-void arena_initialize_buffer(Arena *bowl, rb_t *rb);
-void *arena_finalize_buffer(Arena *bowl, rb_t *rb, bool pointer_array);
+/* void arena_initialize_buffer(Arena *bowl, rb_t *rb); */
+/* void *arena_finalize_buffer(Arena *bowl, rb_t *rb, bool pointer_array); */
 
 /* useful macros so you don't have to get the number of pointers right. */
 
@@ -141,15 +167,41 @@ void *arena_finalize_buffer(Arena *bowl, rb_t *rb, bool pointer_array);
         ((char *)&(x)._arena_begin_ptrs - (char *)&(x))/sizeof(void *), \
         ((char *)&(x)._arena_end_ptrs - (char *)&(x))/sizeof(void *))
 
-/* these freeze and thaw an arena to a pickled version that can be copied
+/* These freeze and thaw data to a pickled version that can be copied
  * around or stored.
  *
  * It may even be stored to disk on machines of the same architecture and
  * endianness which is useful for a cache or distributing data between machines
  * with the same memory model.
  *
- * data may be thawed in-place and directly used.
+ * data may be thawed in-place and directly used without copying.
+ *
+ * beforing using frozen data you must thaw it. the same data may be thawed
+ * multiple times without issue.
+ *
  */
+
+/* header for frozen data, it will be a contiguous sequence of bytes. length
+ * contains the length of the entire buffer. pointers within it may not be valid
+ * unless thawed.
+ *
+ * for instance to make a copy of a frozen data structure
+ *
+ * struct frozen *old;
+ * struct frozen *new = malloc(old->length);
+ * memcpy(new,old,old->length);
+ * void *copied_data = yoink_thaw(new);
+ *
+ * or to serialize the data to a file you could do
+ * fwrite(new, 1, new->length, file);
+ *
+ * */
+struct frozen {
+        uintptr_t magic;       // magic number used for sanity checking
+        uintptr_t length;      // length in bytes including frozen header
+        uintptr_t base;        // relocation base, contains pointer base, updated by thaw.
+        void *data[];
+};
 
 /*
  * freezes the data to a single contiguous buffer in a machine dependent
@@ -162,20 +214,15 @@ void *arena_finalize_buffer(Arena *bowl, rb_t *rb, bool pointer_array);
  * performs a yoink under the hood, nothing not pointed to by ptr will be pulled
  * in.
  *
- * key is included with the frozen data and may be passed to thaw which will
- * verify it before unfreezing. This can be used for very basic error detection
- * or versioning.
+ * ice may be NULL in which case a freshly malloced buffer will be returned,
+ * else the data will be written right after ice in memory using no more than
+ * ice->length bytes. if it would take more bytes than are available then NULL
+ * is returned and the contents of ice are unspecified.
  *
- * Unlike yoinking, this will validate all pointers point to sothing in from or
- * are NULL and will fail if this is not the case.
- *
- * if the unsafe flag is set to true, it will behave like other yoinks and
- * serialize unknown pointers rather than attempt to follow them. This is
- * dangerous as it could lead to a corrupt frozen stream.
  *
  * */
 
-void arena_freeze(rb_t *to, void *, int key);
+struct frozen *yoink_freeze(void *, struct frozen *ice);
 
 /* This thaws data _in place_. the data will not be associated with an arena but
  * will still reside in *ptr which is still owned by the caller of thaw. It may
@@ -193,11 +240,7 @@ void arena_freeze(rb_t *to, void *, int key);
  * NULL is returned.
  * */
 
-void *arena_thaw(int key, size_t len, void **ptr);
+void *yoink_thaw(struct frozen *ice);
 
-
-/* get the key from the frozen data passed to freeze, this can be used for basic
- * validation and versioning */
-int arena_check_frozen_key(void *data);
 
 #endif /* end of include guard: YOINK_H */

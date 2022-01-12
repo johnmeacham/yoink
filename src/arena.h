@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <stdarg.h>
 #include "yoink_private.h"
+#include "resizable_buf.h"
 
 struct Arena {
         struct chain *_Atomic chain;
@@ -32,5 +33,13 @@ char *arena_vprintf(Arena *arena, char *fmt, va_list ap) _MALLOC;
 char *arena_strdup(Arena *arena, char *s) _MALLOC;
 char *arena_strndup(Arena *arena, char *s, size_t n) _MALLOC;
 void *arena_memcpy(Arena *arena, void *data, size_t len) _MALLOC;
+
+/* clear buffer and initialize it such that it can be added to an arena or yoink
+ * metadata can be added to it later. */
+void arena_initialize_rb(rb_t *buf);
+
+/* add buffer initialized with arena_initialize_buffer to specified arena and
+ * return the data added to it. buf is left empty after the arena claims its contents. */
+void *arena_finalize_rb(Arena *bowl, rb_t *buf);
 
 #endif /* end of include guard: ARENA_H */

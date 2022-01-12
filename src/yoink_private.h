@@ -1,6 +1,7 @@
 #ifndef YOINK_PRIVATE_H
 #define YOINK_PRIVATE_H
 /* some private definitions we don't want to clutter our public header */
+#include <inttypes.h>
 
 #ifdef __GNUC__
 #define _MALLOC \
@@ -18,7 +19,6 @@
 
 struct chain;
 
-// the ptrs is needed so the size gets aligned to a pointer boundry.
 struct header {
         int32_t tsz;
         int16_t nptrs;

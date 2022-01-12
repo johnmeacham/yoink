@@ -17,17 +17,10 @@
 /* we depend on these being the same size */
 _Static_assert(sizeof(void*) == sizeof(uintptr_t));
 
-/* void arena_free(Arena *arena) */
-/* { */
-/*         struct chain *orig = atomic_load(&arena->chain); */
-/*         while (!atomic_compare_exchange_weak(&arena->chain, &orig, NULL)); */
-/*         while (orig) { */
-/*                 struct chain *nnext = orig->next; */
-/*                 free(orig); */
-/*                 orig = nnext; */
-/*         }; */
-/*         assert(!arena->chain); */
-/* } */
+
+struct header *yoink_header(void *ptr) {
+        return container_of(ptr, struct header, data);
+}
 
 void *arena_alloc(Arena *arena, int tsz, int bptrs, int eptrs)
 {
@@ -65,65 +58,7 @@ chain_dup(Arena *to, struct chain *chain)
         return new;
 }
 
-/* char * */
-/* arena_strdup(Arena *bowl, char *s) { */
-/*         size_t len = strlen(s) + 1; */
-/*         char *ret = arena_alloc(bowl, len, 0, 0); */
-/*         memcpy(ret, s, len); */
-/*         return ret; */
-/* } */
-/* char * */
-/* arena_vprintf(Arena *bowl, char *fmt, va_list ap) { */
-/*         va_list cap; */
-/*         va_copy(cap, ap); */
-/*         int size = vsnprintf(NULL, 0, fmt, cap); */
-/*         va_end(cap); */
-/*         if (size < 0) */
-/*                 return NULL; */
-/*         char *ret = arena_alloc(bowl, size + 1, 0, 0); */
-/*         size = vsnprintf(ret, size + 1, fmt, ap); */
-/*         if (size < 0) */
-/*                 return NULL; */
-/*         return ret; */
-/* } */
 
-/* char * */
-/* arena_printf(Arena *bowl, char *fmt, ...) { */
-/*         va_list ap; */
-/*         va_start(ap, fmt); */
-/*         char *ret = arena_vprintf(bowl, fmt, ap); */
-/*         va_end(ap); */
-/*         return ret; */
-/* } */
-
-/* void * */
-/* arena_memcpy(Arena *bowl, void *data, size_t len) { */
-/*         return memcpy(arena_alloc(bowl, len, 0, 0), data, len); */
-/* } */
-
-void
-arena_initialize_buffer(Arena *bowl, rb_t *buf) {
-        /* clear buffer */
-        rb_free(buf);
-        rb_calloc(buf, sizeof(struct chain));
-}
-
-void *
-arena_finalize_buffer(Arena *bowl, rb_t *buf, bool pointer_array) {
-        /* make sure we have some breathing room to keep alignments correct. */
-        int tsz = _ARENA_RUP(rb_len(buf));
-        rb_calloc(buf, tsz*sizeof(void*) - rb_len(buf));
-        struct chain *chain = rb_ptr(buf);
-        chain->head.tsz = rb_len(buf);
-        if(pointer_array)
-                chain->head.nptrs = tsz;
-
-        struct chain *orig = atomic_load(&bowl->chain);
-        do {
-                chain->next = orig;
-        } while (!atomic_compare_exchange_weak(&bowl->chain, &orig, chain));
-        return rb_take(buf);
-}
 
 /* trace will contain integers with the offsets to all the pointers in rb, hash
  * table will be filled with a map of pointers to offsets, if keep_meta is true
@@ -156,7 +91,7 @@ _arena_yoink_to_rb(rb_t *target, bool keep_meta, HashTable *ht, rb_t *trace, voi
 }
 
 void *
-arena_yoink_to_malloc(void *root, size_t *len)
+yoink_to_malloc(void *root, size_t *len, bool keep_metadata)
 {
         if (len)
                 *len = 0;
@@ -269,9 +204,9 @@ arena_vacuums(Arena *bowl, int nroots, void *root[nroots])
 }
 
 
-void *arena_yoink(Arena *to, void *root)
+void *yoink_to_arena(Arena *to, void *root)
 {
-        arena_yoinks(to, true, 1, &root);
+        yoinks_to_arena(to, 1, &root);
         return root;
 }
 
@@ -279,7 +214,7 @@ void *arena_yoink(Arena *to, void *root)
  * just to catch gross errors early */
 static
 uintptr_t mk_signature(void) {
-        uintptr_t sig = 0x1;
+        uintptr_t sig = 0xDEADBEEF;
         uintptr_t byteorder = 0x10203040;
         sig = hash_uintptr(sig ^ sizeof(short));
         sig = hash_uintptr(sig ^ sizeof(int));
@@ -322,16 +257,18 @@ void arena_freeze(rb_t *to, void *root, int key) {
 }
 void *
 arena_thaw(int key, size_t len, void **ptr) {
-        if(!signature)
-                signature = mk_signature();
-        if(!ptr || !*ptr || len < sizeof(uintptr_t)*3)
-                return NULL;
-        uintptr_t *ps = *ptr;
-        if((ps[0] ^ key) != signature)
-                return NULL;
-        if(ps[1] > len)
-                return NULL;
-        rb_t trace = RB_BLANK;
+        /* if(!signature) */
+        /*         signature = mk_signature(); */
+        /* if(!ptr || !*ptr || len < sizeof(uintptr_t)*3) */
+        /*         return NULL; */
+        /* uintptr_t *ps = *ptr; */
+        /* if((ps[0] ^ key) != signature) */
+        /*         return NULL; */
+        /* if(ps[1] > len) */
+        /*         return NULL; */
+//        rb_t trace = RB_BLANK;
+//        return
+return 0;
 }
 
 /* test code after this */
@@ -456,7 +393,7 @@ int main(int argc, char *argv[])
         dump_tree(root, 0);
         printf("before: %lu\n", arena_nbytes(&arena));
         Arena arena2 = ARENA_INIT;
-        struct node *root2 =  arena_yoink(&arena2, root);
+        struct node *root2 =  yoink_to_arena(&arena2, root);
         printf("after: %lu\n", arena_nbytes(&arena2));
         dump_tree(root2, 0);
         arena_free(&arena);
@@ -465,11 +402,11 @@ int main(int argc, char *argv[])
         root2->left->right = root2;
         dump_tree(root2, 0);
         Arena arena3 = ARENA_INIT;
-        struct node *root3 = arena_yoink(&arena3, root2);
+        struct node *root3 = yoink_to_arena(&arena3, root2);
         printf("after3: %lu\n", arena_nbytes(&arena3));
         dump_tree(root3, 0);
         size_t len;
-        void *root4 = arena_yoink_to_malloc(root3, &len);
+        void *root4 = yoink_to_malloc(root3, &len, false);
         printf("after4: %lu\n", len);
         dump_tree(root4, 0);
         printf("big one \n");
@@ -479,7 +416,7 @@ int main(int argc, char *argv[])
                 root = insert_tree(&arena, root, rand() % 1000);
         dump_tree(root, 0);
         printf("before: %lu\n", arena_nbytes(&arena));
-        void *rooty = arena_yoink_to_malloc(root, &len);
+        void *rooty = yoink_to_malloc(root, &len, false);
         printf("after5: %lu\n", len);
         dump_tree(rooty, 0);
         compare_tree(rooty, root);
@@ -494,7 +431,7 @@ int main(int argc, char *argv[])
                 root = insert_tree(&arena, root, rand() % 1000);
         printf("nbytes_before: %lu\n", arena_nbytes(&arena));
         void *roots[] = {root};
-        arena_yoink(&arena2, root);
+        yoink_to_arena(&arena2, root);
         arena_vacuums(&arena, 1, roots);
         printf("nbytes_afterV: %lu\n", arena_nbytes(&arena));
         printf("nbytes_afterY: %lu\n", arena_nbytes(&arena2));
