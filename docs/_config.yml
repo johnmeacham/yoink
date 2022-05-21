@@ -1,1 +1,4 @@
 theme: jekyll-theme-minimal
+name: yoink
+description: C library for copying complex data structures
+author: John Meacham
