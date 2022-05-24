@@ -198,7 +198,7 @@ struct frozen {
         void *data[];
 };
 
-/*
+/**
  * freezes the data to a single contiguous buffer in a machine dependent
  * serializable format.
  *
@@ -219,7 +219,7 @@ struct frozen {
 
 struct frozen *yoink_freeze(void *, struct frozen *ice);
 
-/* This thaws data _in place_. the data will not be associated with an arena but
+/** This thaws data _in place_. the data will not be associated with an arena but
  * will still reside in *ptr which is still owned by the caller of thaw. It may
  * be referenced by other arena allocated data directly though and things will
  * work properly. If you want to put the data in an arena, it can be yoinked
